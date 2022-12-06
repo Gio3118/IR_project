@@ -1,0 +1,8 @@
+version: '3.8'
+
+services:
+  search-service:
+    build: search-service
+    command: python main.py
+    volumes:
+      - "./search-service:/search-service"
