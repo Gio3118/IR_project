@@ -1,5 +1,5 @@
-# Ignore dataset because it's too large
-src/data
+# Ignore model files because they are too large for the VCS to remain efficient
+*.pt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
