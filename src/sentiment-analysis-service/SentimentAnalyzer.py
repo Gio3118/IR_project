@@ -1,28 +1,44 @@
-# Using a pretrained BERT model to classify the sentiment of a given tweet.
-import numpy as np
-import pandas as pd
 import torch
-import torch.optim as optim
-import matplotlib.pyplot as plt
-import seaborn
+import pandas as pd
 import re
+import time
+import numpy as np
+from datetime import datetime as dt
 
-from torch.utils.data import TensorDataset, random_split, DataLoader, RandomSampler
-from transformers import AutoTokenizer, BertForSequenceClassification, get_linear_schedule_with_warmup
+from torch.utils.data import (
+    TensorDataset,
+    random_split,
+    DataLoader,
+    RandomSampler,
+    SequentialSampler,
+)
+from torch.optim import SGD, AdamW, lr_scheduler
 
-DATA_PATH = "src/data/"
+
+SENTIMENTS = {
+    "extremely negative": 0,
+    "negative": 1,
+    "neutral": 2,
+    "positive": 3,
+    "extremely positive": 4,
+}
 
 
-def clean_tweet(tweet):
+def sentiment_to_int(sentiment: str) -> int:
+    return SENTIMENTS.get(sentiment.lower(), None)
+
+
+def clean_tweet(tweet: str) -> str:
     tweet = tweet.lower()
     # detect and remove (hash)tags
     tweet = re.sub(r"@[A-Za-z0-9_?-]+", "usertag", tweet)
     tweet = re.sub(r"#[A-Za-z0-9_?-]+", "trendtag", tweet)
+
     # detect and remove urls
     tweet = re.sub(r"https?://[A-Za-z0-9./]+", "", tweet)
 
     # remove all non alphanumeric characters
-    tweet = re.sub(r"[^a-zA-Z0-9,]", " ", tweet)
+    tweet = re.sub(r"[^a-zA-Z0-9]", " ", tweet)
 
     tweet = re.sub(r" +", " ", tweet)
     # strip trailing and leading whitespaces
@@ -30,143 +46,238 @@ def clean_tweet(tweet):
     return tweet
 
 
-def preprocess_dataset(filename: str) -> pd.DataFrame:
-    set_df = pd.read_csv(DATA_PATH + filename, encoding="latin-1", header=None)
-    set_df.drop(columns=[1, 2, 3, 4], axis=1, inplace=True)
-    set_df.columns = ["sentiment", "text"]
+def accuracy_score(preds: torch.Tensor, labels: torch.Tensor):
+    preds = np.concatenate(preds, axis=0)
+    labels = np.concatenate(labels, axis=0)
+    preds = np.argmax(preds, axis=1).flatten()
+    labels = labels.flatten()
+    return (preds == labels).mean() * 100
 
-    # Replace 4 with 1 since the dataset does not contain any sentiments between 0 and 4
-    set_df.sentiment.replace(4, 1, inplace=True)
-    set_df["text"] = set_df.text.apply(clean_tweet)
-    
+
+def load_data_from_csv(
+    filename: str, header=None, cols=None, drop_cols=None, tweets_col=None
+) -> pd.DataFrame:
+    set_df = pd.read_csv(filename, encoding="latin-1", header=header)
+    if cols:
+        set_df.columns = cols
+    if drop_cols:
+        set_df.drop(columns=drop_cols, axis=1, inplace=True)
+    if tweets_col:
+        set_df[tweets_col] = set_df[tweets_col].apply(clean_tweet)
     return set_df
 
 
-def tokenize_dataset(dataset: pd.DataFrame) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    # Tokenize all of the sentences and map the tokens to their word IDs.
-    input_ids = []
-    attention_masks = []
-    i = 0
-    for tweet in dataset.OriginalTweet.values:
-        if i % 1000 == 0:
-            print(f"Tokenizing tweet {i}")
-        i += 1
-        encoded_dict = tokenizer.encode_plus(
-            tweet,
+class BERTSentimentAnalyzer:
+    """_summary_
+
+    Args:
+        model_name (str, optional): Name of the model, will be used when saving the model. Defaults to "BERT-Sentiment-Analyzer".
+        model_path (str, optional): Path to the model that should be loaded, if any. Defaults to None.
+        gpu_enabled (bool, optional): Whether or not a gpu is available and should be used. Defaults to True.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "BERT-Sentiment-Analyzer",
+        model_path: str = None,
+        gpu_enabled: bool = True,
+    ):
+        self.tokenizer = torch.hub.load(
+            "huggingface/pytorch-transformers",
+            "tokenizer",
+            "bert-base-uncased",
+            trust_repo="check",
+        )
+        self.model = torch.hub.load(
+            "huggingface/pytorch-transformers",
+            "modelForSequenceClassification",
+            "bert-base-uncased",
+            output_attentions=True,
+            trust_repo="check",
+        )
+
+        self.model.classifier = torch.nn.Linear(self.model.classifier.in_features, 5)
+
+        if gpu_enabled:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device("cpu")
+        self.model_path = model_path
+        self.model_name = model_name
+
+        if self.model_path is not None:
+            self.load_model()
+
+        self.model.to(self.device)
+
+    def save_model(self):
+        now = dt.now
+        torch.save(
+            self.model.state_dict(), self.model_name + now.strftime("%Y%m%d%H%M%S")
+        )
+
+    def load_model(self):
+        self.model.load_state_dict(torch.load(self.model_path))
+
+    def analyze(self, text: str) -> int:
+        text = clean_tweet(text)
+        encoded_dict = self.tokenizer.encode_plus(
+            text,
             add_special_tokens=True,
             max_length=128,
             padding="max_length",
             return_attention_mask=True,
-            return_tensors='pt',
+            return_tensors="pt",
+        )
+        input_ids = encoded_dict["input_ids"].cuda()
+        attention_masks = encoded_dict["attention_mask"].cuda()
+        output = self.model(input_ids, attention_masks)
+        return output[0].argmax().item()
+
+    def tokenize_data(
+        self,
+        dataset: pd.DataFrame,
+        data_column: str = "OriginalTweet",
+        sentiment_column: str = "Sentiment",
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        input_ids = []
+        attention_masks = []
+        for tweet in dataset[data_column].values:
+            encoded_dict = self.tokenizer.encode_plus(
+                tweet,
+                add_special_tokens=True,
+                max_length=128,
+                padding="max_length",
+                return_attention_mask=True,
+                return_tensors="pt",
+            )
+
+            input_ids.append(encoded_dict["input_ids"])
+            attention_masks.append(encoded_dict["attention_mask"])
+
+        input_ids = torch.cat(input_ids, dim=0)
+        attention_masks = torch.cat(attention_masks, dim=0)
+        labels = torch.tensor(dataset[sentiment_column].apply(sentiment_to_int).values)
+        return input_ids, attention_masks, labels
+
+    def train(self, train_df: pd.DataFrame, epochs: int = 12):
+        # Tokenize all the tweets, mapping words to word IDs.
+        input_ids, attention_masks, labels = self.tokenize_data(train_df)
+
+        # Splitting the training data into train and validation sets
+        data = TensorDataset(input_ids, attention_masks, labels)
+        train_size = len(data) * 0.9
+        val_size = len(data) - train_size
+        training_data, validation_data = random_split(data, [train_size, val_size])
+
+        # Creating Dataloaders for the training and validation sets
+        training_dataloader = DataLoader(
+            training_data, sampler=RandomSampler(training_data), batch_size=16
+        )
+        validation_dataloader = DataLoader(
+            validation_data, sampler=RandomSampler(validation_data), batch_size=16
         )
 
-        input_ids.append(encoded_dict['input_ids'])
-        attention_masks.append(encoded_dict['attention_mask'])
+        # Setting up the optimizer and the learning rate scheduler
+        optimizer = SGD(self.model.parameters(), lr=0.01, momentum=0.9)
+        # optimizer = AdamW(self.model.parameters(), lr=2e-5, eps=1e-8)
+        total_steps = len(training_dataloader) * epochs
+        scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.1)
+        torch.cuda.empty_cache()
 
-    input_ids = torch.cat(input_ids, dim=0)
-    attention_masks = torch.cat(attention_masks, dim=0)
-    labels = torch.tensor(dataset.Sentiment.apply(sentiment_to_int).values)
+        # Training loop
+        for epoch in range(epochs):
+            t_start_epoch = time.time()
+            total_loss = 0
+            self.model.train()
+            for step, batch in enumerate(training_dataloader):
+                batch = tuple(t.cuda() for t in batch)
+                b_input_ids, b_input_mask, b_labels = batch
+                self.model.zero_grad()
+                outputs = self.model(
+                    input_ids=b_input_ids,
+                    attention_mask=b_input_mask,
+                    labels=b_labels,
+                )
+                loss = outputs[0]
+                total_loss += loss.item()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                optimizer.step()
+                scheduler.step()
 
-    return input_ids, attention_masks, labels
+            self.save_model()
+            avg_train_loss = total_loss / len(training_dataloader)
+            preds, truths = self.evaluate(validation_dataloader)
+            accuracy = accuracy_score(preds, truths)
+            training_time_epoch = time.time() - t_start_epoch
+            print(
+                f"Epoch: {epoch + 1},",
+                f"Accuracy: {accuracy:.2f}%,",
+                f"Average training loss: {avg_train_loss},",
+                f"Training time: {training_time_epoch} seconds",
+                sep="\t",
+            )
 
+    def test(self, test_df: pd.DataFrame):
+        input_ids, attention_masks, labels = self.tokenize_data(test_df)
+        data = TensorDataset(input_ids, attention_masks, labels)
+        test_dataloader = DataLoader(
+            data, sampler=SequentialSampler(data), batch_size=16
+        )
+        preds, truths = self.evaluate(test_dataloader)
+        accuracy = accuracy_score(preds, truths)
+        print(f"Accuracy: {accuracy:.2f}%")
 
-def sentiment_to_int(sentiment: str) -> int:
-    if sentiment == "Extremely Negative":
-        return 0
-    elif sentiment == "Negative":
-        return 1
-    elif sentiment == "Neutral":
-        return 2
-    elif sentiment == "Positive":
-        return 3
-    elif sentiment == "Extremely Positive":
-        return 4
-    else:
-        raise ValueError(f"Sentiment {sentiment} is not valid")
-
-
-def train_model(train_df: pd.DataFrame):
-    input_ids, attention_masks, labels = tokenize_dataset(train_df)
-    data = TensorDataset(input_ids, attention_masks, labels)
-    training_data, validation_data = random_split(data, [40000, 1157])
-    training_dataloader = DataLoader(training_data, sampler=RandomSampler(training_data), batch_size=16)
-    validation_dataloader = DataLoader(validation_data, sampler=RandomSampler(validation_data), batch_size=16)
-
-    model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=5, output_attentions=False, output_hidden_states=False)
-    model.cuda()
-
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    epochs = 4
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=len(training_dataloader) * epochs)
-    
-    torch.cuda.empty_cache()
-    for epoch in range(epochs):
-        model.train()
-        total_loss = 0
-        for step, batch in enumerate(training_dataloader):
-            if step % 5 == 0 and not step == 0:
-                print(f"Batch {step} of {len(training_dataloader)}")
+    def evaluate(self, eval_loader: DataLoader):
+        self.model.eval()
+        predictions, true_labels = [], []
+        for batch in eval_loader:
             batch = tuple(t.cuda() for t in batch)
             b_input_ids, b_input_mask, b_labels = batch
-            model.zero_grad()
-
-            outputs = model(input_ids=b_input_ids, attention_mask=b_input_mask, labels=b_labels)
-            loss = outputs[0]
-            total_loss += loss.item()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            scheduler.step()
-        
-        avg_train_loss = total_loss / len(training_dataloader)
-        print(f"Average training loss: {avg_train_loss}")
-        evaluate_model(validation_dataloader, model)
-
-
-def evaluate_model(validation_dataloader: DataLoader, model: BertForSequenceClassification):
-    model.eval()
-    total_eval_loss = 0
-    preds, truth = [], []
-    for step, batch in enumerate(validation_dataloader):
-        batch = tuple(t.cuda() for t in batch)
-        b_input_ids, b_input_mask, b_labels = batch
-        with torch.no_grad():
-            outputs = model(input_ids=b_input_ids, attention_mask=b_input_mask, labels=b_labels)
-            loss = outputs[0]
-            logits = outputs[1]
-        total_eval_loss += loss.item()
-        logits = logits.detach().cpu().numpy()
-        labels = b_labels.to('cpu').numpy()
-        preds.append(logits)
-        truth.append(labels)
-    preds = np.argmax(preds, axis=0).flatten()
-    truth = truth.flatten()
-    accuracy = np.sum(preds=truth) / len(truth)
-    print(f"Accuracy: {accuracy}")
-    avg_val_loss = total_eval_loss / len(validation_dataloader)
-    print(f"Validation loss: {avg_val_loss}")
-
-
-
-def main():
-    train_df = pd.read_csv(DATA_PATH + "coronanlp/Corona_NLP_train.csv", encoding="latin-1", header=0)
-    train_df.columns = ["UserName", "ScreenName", "Location", "TweetAt", "OriginalTweet", "Sentiment"]
-    train_df.drop(columns=["UserName", "ScreenName", "Location", "TweetAt"], axis=1, inplace=True)
-    train_df.OriginalTweet = train_df.OriginalTweet.apply(clean_tweet)
-
-    train_model(train_df)
-
-    # test_df = pd.read_csv(DATA_PATH + "coronanlp/Corona_NLP_test.csv", encoding="latin-1", header=0)
-    # test_df.columns = ["UserName", "ScreenName", "Location", "TweetAt", "OriginalTweet", "Sentiment"]
-    # test_df.drop(columns=["UserName", "ScreenName", "Location", "TweetAt"], axis=1, inplace=True)
-    # test_df.OriginalTweet.apply(clean_tweet, inplace=True)
-
-    
-
+            with torch.no_grad():
+                outputs = self.model(
+                    input_ids=b_input_ids,
+                    attention_mask=b_input_mask,
+                )
+            logits = outputs[0]
+            logits = logits.detach().cpu().numpy()
+            label_ids = b_labels.cpu().numpy()
+            predictions.append(logits)
+            true_labels.append(label_ids)
+        return predictions, true_labels
 
 
 if __name__ == "__main__":
-    main()
+    import os
 
+    path_cur_file = os.path.dirname(__file__)
+    model_path = os.path.join(path_cur_file, "models/model_12.pt")
+    model = BERTSentimentAnalyzer(model_path=model_path)
+    res = model.analyze("Omg I love this movie so much!")
+    print(res)
+    res = model.analyze("That ref was really biased")
+    print(res)
+    columns = [
+        "UserName",
+        "ScreenName",
+        "Location",
+        "TweetAt",
+        "OriginalTweet",
+        "Sentiment",
+    ]
+    drop_columns = [
+        "UserName",
+        "ScreenName",
+        "Location",
+        "TweetAt",
+    ]
+    test_df = load_data_from_csv(
+        "src/data/coronanlp/Corona_NLP_test.csv",
+        header=0,
+        cols=columns,
+        drop_cols=drop_columns,
+        tweets_col="OriginalTweet",
+    )
 
+    model.test(test_df)
