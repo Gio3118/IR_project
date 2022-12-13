@@ -133,6 +133,13 @@ class BERTSentimentAnalyzer:
         attention_masks = encoded_dict["attention_mask"].cuda()
         output = self.model(input_ids, attention_masks)
         return output[0].argmax().item()
+    
+    def analyze_batch(self, tweets: list):
+        sentiments = []
+        for tweet in tweets:
+            sentiment = self.analyze(tweet)
+            sentiments.append(sentiment)
+        return sentiments
 
     def tokenize_data(
         self,
