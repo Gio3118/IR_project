@@ -1,3 +1,4 @@
+import os
 import torch
 import pandas as pd
 import re
@@ -111,10 +112,11 @@ class BERTSentimentAnalyzer:
         self.model.to(self.device)
 
     def save_model(self):
-        now = dt.now
-        torch.save(
-            self.model.state_dict(), self.model_name + now.strftime("%Y%m%d%H%M%S")
-        )
+        now = dt.now()
+        filename = self.model_name + now.strftime("%Y-%m-%d-%H.%M.%S")
+        path_cur_file = os.path.dirname(__file__)
+        model_path = os.path.join(path_cur_file, "models", filename)
+        torch.save(self.model.state_dict(), model_path)
 
     def load_model(self):
         self.model.load_state_dict(torch.load(self.model_path))
@@ -133,7 +135,7 @@ class BERTSentimentAnalyzer:
         attention_masks = encoded_dict["attention_mask"].cuda()
         output = self.model(input_ids, attention_masks)
         return output[0].argmax().item()
-    
+
     def analyze_batch(self, tweets: list):
         sentiments = []
         for tweet in tweets:
@@ -173,10 +175,9 @@ class BERTSentimentAnalyzer:
 
         # Splitting the training data into train and validation sets
         data = TensorDataset(input_ids, attention_masks, labels)
-        train_size = len(data) * 0.9
+        train_size = int(len(data) * 0.9)
         val_size = len(data) - train_size
         training_data, validation_data = random_split(data, [train_size, val_size])
-
         # Creating Dataloaders for the training and validation sets
         training_dataloader = DataLoader(
             training_data, sampler=RandomSampler(training_data), batch_size=16
@@ -189,8 +190,13 @@ class BERTSentimentAnalyzer:
         optimizer = SGD(self.model.parameters(), lr=0.01, momentum=0.9)
         # optimizer = AdamW(self.model.parameters(), lr=2e-5, eps=1e-8)
         total_steps = len(training_dataloader) * epochs
-        scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.1)
+        scheduler = lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.1, patience=5
+        )
         torch.cuda.empty_cache()
+
+        # Loss function
+        loss_function = torch.nn.CrossEntropyLoss()
 
         # Training loop
         for epoch in range(epochs):
@@ -204,19 +210,19 @@ class BERTSentimentAnalyzer:
                 outputs = self.model(
                     input_ids=b_input_ids,
                     attention_mask=b_input_mask,
-                    labels=b_labels,
                 )
-                loss = outputs[0]
+                loss = loss_function(outputs[0], b_labels)
                 total_loss += loss.item()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 optimizer.step()
-                scheduler.step()
+            total_loss /= len(training_dataloader)
 
             self.save_model()
             avg_train_loss = total_loss / len(training_dataloader)
-            preds, truths = self.evaluate(validation_dataloader)
+            preds, truths, validation_loss = self.evaluate(validation_dataloader)
             accuracy = accuracy_score(preds, truths)
+            scheduler.step(validation_loss)
             training_time_epoch = time.time() - t_start_epoch
             print(
                 f"Epoch: {epoch + 1},",
@@ -232,13 +238,15 @@ class BERTSentimentAnalyzer:
         test_dataloader = DataLoader(
             data, sampler=SequentialSampler(data), batch_size=16
         )
-        preds, truths = self.evaluate(test_dataloader)
+        preds, truths, _ = self.evaluate(test_dataloader)
         accuracy = accuracy_score(preds, truths)
         print(f"Accuracy: {accuracy:.2f}%")
 
     def evaluate(self, eval_loader: DataLoader):
         self.model.eval()
         predictions, true_labels = [], []
+        loss_function = torch.nn.CrossEntropyLoss()
+        total_validation_loss = 0
         for batch in eval_loader:
             batch = tuple(t.cuda() for t in batch)
             b_input_ids, b_input_mask, b_labels = batch
@@ -248,23 +256,20 @@ class BERTSentimentAnalyzer:
                     attention_mask=b_input_mask,
                 )
             logits = outputs[0]
+            loss = loss_function(logits, b_labels)
+            total_validation_loss += loss.item()
             logits = logits.detach().cpu().numpy()
             label_ids = b_labels.cpu().numpy()
             predictions.append(logits)
             true_labels.append(label_ids)
-        return predictions, true_labels
+        validation_loss = total_validation_loss / len(eval_loader)
+        return predictions, true_labels, validation_loss
 
 
 if __name__ == "__main__":
-    import os
+    TRAIN = False
+    TEST = True
 
-    path_cur_file = os.path.dirname(__file__)
-    model_path = os.path.join(path_cur_file, "models/model_12.pt")
-    model = BERTSentimentAnalyzer(model_path=model_path)
-    res = model.analyze("Omg I love this movie so much!")
-    print(res)
-    res = model.analyze("That ref was really biased")
-    print(res)
     columns = [
         "UserName",
         "ScreenName",
@@ -279,12 +284,34 @@ if __name__ == "__main__":
         "Location",
         "TweetAt",
     ]
-    test_df = load_data_from_csv(
-        "src/data/coronanlp/Corona_NLP_test.csv",
-        header=0,
-        cols=columns,
-        drop_cols=drop_columns,
-        tweets_col="OriginalTweet",
-    )
 
-    model.test(test_df)
+    if TEST:
+        path_cur_file = os.path.dirname(__file__)
+        model_path = os.path.join(path_cur_file, "models/BertModel-acc87.pt")
+        model = BERTSentimentAnalyzer(model_path=model_path)
+        res = model.analyze("Omg I love this movie so much!")
+        print(res)
+        res = model.analyze("That ref was really biased")
+        print(res)
+        test_df = load_data_from_csv(
+            "src/data/coronanlp/Corona_NLP_test.csv",
+            header=0,
+            cols=columns,
+            drop_cols=drop_columns,
+            tweets_col="OriginalTweet",
+        )
+
+        model.test(test_df)
+
+    if TRAIN:
+        path_cur_file = os.path.dirname(__file__)
+        model_path = os.path.join(path_cur_file, "BertModel2022-12-14-13.40.26")
+        model = BERTSentimentAnalyzer(model_name="BertModel", model_path=model_path)
+        train_df = load_data_from_csv(
+            "src/data/coronanlp/Corona_NLP_train.csv",
+            header=0,
+            cols=columns,
+            drop_cols=drop_columns,
+            tweets_col="OriginalTweet",
+        )
+        model.train(train_df, epochs=100)

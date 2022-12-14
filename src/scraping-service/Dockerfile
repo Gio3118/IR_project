@@ -1,7 +1,7 @@
 FROM python
 ENV PYTHONBUFFERED 1
 
-WORKDIR /sentiment-analysis-service
+WORKDIR /scraping-service
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 COPY . .

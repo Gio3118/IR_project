@@ -4,5 +4,31 @@ services:
   search-service:
     build: search-service
     command: python main.py
+    # links:
     volumes:
       - "./search-service:/search-service"
+  sentiment-analysis-service:
+    build: sentiment-analysis-service
+    ports:
+      - "5000"
+    command: python -m flask run --host=0.0.0.0 --port=5000
+    environment:
+      - FLASK_APP=sentiment-analysis-service/app.py
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    links:
+      - search-service
+      - scraping-service
+    volumes:
+      - "./sentiment-analysis-service:/sentiment-analysis-service"
+
+  scraping-service:
+    build: scraping-service
+    command: python -m flask run --host=0.0.0.0 --port=5000
+    environment:
+      - FLASK_APP=scraping-service/app.py
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    #links:
+    volumes:
+      - "./scraping-service:/scraping-service"
