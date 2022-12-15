@@ -37,7 +37,7 @@ dataPath = "./data"
 
 def indexData():
     writerConfig = IndexWriterConfig(StandardAnalyzer())
-    writerConfig.setOpenMode(IndexWriterConfig.OpenMode.CREATE)
+    writerConfig.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND)
     fsDir = MMapDirectory(Paths.get('index'))
     writer = IndexWriter(fsDir, writerConfig)
 
