@@ -1,50 +1,95 @@
-#!/usr/bin/env python
+'''
+Indexing using PyLucene, example code
+'''
+import os
+import csv
+from pathlib import Path
 
-INDEX_DIR = "IndexFiles.index"
-
-import sys, os, lucene
+import lucene
 
 from java.nio.file import Paths
 from org.apache.lucene.analysis.standard import StandardAnalyzer
-from org.apache.lucene.index import DirectoryReader
-from org.apache.lucene.queryparser.classic import QueryParser
-from org.apache.lucene.store import NIOFSDirectory
-from org.apache.lucene.search import IndexSearcher
+from org.apache.lucene.document import Document, Field, FieldType
+from org.apache.lucene.index import (IndexOptions, IndexWriter, IndexWriterConfig)
+from org.apache.lucene.store import MMapDirectory, NIOFSDirectory
 
 
-"""
-This script is loosely based on the Lucene (java implementation) demo class
-org.apache.lucene.demo.SearchFiles.  It will prompt for a search query, then it
-will search the Lucene index in the current directory called 'index' for the
-search query entered against the 'contents' field.  It will then display the
-'path' and 'name' fields for each of the hits it finds in the index.  Note that
-search.close() is currently commented out because it causes a stack overflow in
-some cases.
-"""
-def run(searcher, analyzer):
-    while True:
-        print ("Hit enter with no input to quit.")
-        command = raw_input("Query:")
-        if command == '':
-            return
+# fsDir = MMapDirectory(Paths.get('index'))
 
-        print ("Searching for:", command)
-        query = QueryParser("contents", analyzer).parse(command)
-        scoreDocs = searcher.search(query, 50).scoreDocs
-        print ("%s total matching documents." % len(scoreDocs))
+#
+# # Define field type
+# t1 = FieldType()
+# t1.setStored(True)
+# t1.setIndexOptions(IndexOptions.DOCS)
+#
+# t2 = FieldType()
+# t2.setStored(False)
+# t2.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
+# print(f"{writer.numRamDocs()} docs found in index")
+# # Add a document
+# doc = Document()
+# doc.add(Field('id', '418129481', t1))
+#
+# writer.addDocument(doc)
+# print(f"{writer.numRamDocs()} docs found in index")
 
-        for scoreDoc in scoreDocs:
-            doc = searcher.doc(scoreDoc.doc)
-            print ('path:', doc.get("path"), 'name:', doc.get("name"))
+dataPath = "./data"
 
+def indexData():
+    writerConfig = IndexWriterConfig(StandardAnalyzer())
+    writerConfig.setOpenMode(IndexWriterConfig.OpenMode.CREATE)
+    fsDir = MMapDirectory(Paths.get('index'))
+    writer = IndexWriter(fsDir, writerConfig)
+
+    #field types
+    nameFieldType = FieldType()
+    #nameFieldType.setIndexed(False)
+    nameFieldType.setStored(True)
+    nameFieldType.setTokenized(True)
+    nameFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
+
+
+    textFieldType = FieldType()
+    #textFieldType.setIndexed(True)
+    textFieldType.setStored(True)
+    textFieldType.setTokenized(True)
+    textFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
+
+    sentimentFieldType = FieldType()
+    #textFieldType.setIndexed(True)
+    sentimentFieldType.setStored(True)
+    sentimentFieldType.setTokenized(True)
+    sentimentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
+
+    for path, subDirs, filenames in os.walk(dataPath):
+        print("path:")
+        print(path)
+        print("SUBDIRS")
+
+        print(subDirs)
+        print("FILENAMES:")
+        print(filenames)
+
+        for filename in filenames:
+            fullPath = path + "/" + filename
+            with open(fullPath) as csv_file:
+                csv_reader = csv.reader(csv_file, delimiter=',')
+                firstRow = True
+                for row in csv_reader:
+                    doc = Document()
+                    if firstRow:
+                        firstRow = False
+                        continue
+                    name = row[0]
+                    text = row[4]
+                    sentiment = row[5]
+                    doc.add(Field('name', name , nameFieldType))
+                    doc.add(Field('text', text , textFieldType))
+                    doc.add(Field('sentiment', sentiment , sentimentFieldType))
+                    writer.addDocument(doc)
+    writer.commit()
+    writer.close()
 
 if __name__ == '__main__':
     lucene.initVM(vmargs=['-Djava.awt.headless=true'])
-    print ('lucene', lucene.VERSION)
-    base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-    path = Paths.get(os.path.join(base_dir, INDEX_DIR))
-    directory = NIOFSDirectory(path)
-    searcher = IndexSearcher(DirectoryReader.open(directory))
-    analyzer = StandardAnalyzer()
-    run(searcher, analyzer)
-    del searcher
+    indexData()
