@@ -15,7 +15,9 @@ from org.apache.lucene.index import IndexOptions, IndexWriter, IndexWriterConfig
 from org.apache.lucene.store import MMapDirectory, NIOFSDirectory
 
 
-data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "data"))
+data_path = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), os.pardir, "data", "coronanlp")
+)
 
 
 def initFields():
@@ -42,18 +44,18 @@ def initFields():
 
 
 def indexFile(path: str):
+    if not path.endswith(".csv") and not path.endswith(".json"):
+        return
     writerConfig = IndexWriterConfig(StandardAnalyzer())
     writerConfig.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND)
     fsDir = MMapDirectory(Paths.get("index"))
     writer = IndexWriter(fsDir, writerConfig)
-    if not path.endswith(".csv") and not path.endswith(".json"):
-        return
     csv = path.endswith(".csv")
 
     usernameField, tweetField, sentimentField = initFields()
 
     if csv:
-        df = pd.read_csv(path, header=0)
+        df = pd.read_csv(path, header=0, encoding="latin-1")
         for index, row in df.iterrows():
             doc = Document()
             name = row["UserName"]
