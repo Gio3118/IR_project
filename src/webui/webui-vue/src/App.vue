@@ -35,7 +35,7 @@ function search({query, selector}: {query: string, selector: string}) {
       <p class="inline text-blue-500">s</p>
     </h1>
     <SearchBar @search="search" />
-    <ResultBox/>
+    <ResultBox :result="{}"/>
   </div>
 </template>
 

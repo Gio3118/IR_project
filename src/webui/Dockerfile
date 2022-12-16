@@ -1,4 +1,4 @@
-FROM python
+FROM python:3.10
 ENV PYTHONBUFFERED 1
 
 WORKDIR /webui

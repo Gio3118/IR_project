@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   webui:
-    build: services/webui
+    build: webui
     ports:
       - "5000:5000"
     command: python -m flask run --host=0.0.0.0 --port=5000
@@ -10,33 +10,35 @@ services:
       - FLASK_APP=webui/app.py
       - FLASK_ENV=development
       - FLASK_DEBUG=1
+      - DOCKER=1
     links:
       - search-service
       - sentiment-analysis-service
       - scraping-service
     volumes:
       - "./webui:/webui"
+      - "./data:/data"
 
   search-service:
     build: search-service
-    command: python main.py
-    # links:
+    command: python -m flask run --host=0.0.0.0 --port=5000
+    environment:
+      - FLASK_APP=webui/app.py
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      - DOCKER=1
     volumes:
       - "./search-service:/search-service"
       - "./data:/data"
 
   sentiment-analysis-service:
     build: sentiment-analysis-service
-    ports:
-      - "5000"
     command: python -m flask run --host=0.0.0.0 --port=5000
     environment:
       - FLASK_APP=sentiment-analysis-service/app.py
       - FLASK_ENV=development
       - FLASK_DEBUG=1
-    links:
-      - search-service
-      - scraping-service
+      - DOCKER=1
     volumes:
       - "./sentiment-analysis-service:/sentiment-analysis-service"
       - "./data:/data"
@@ -48,7 +50,7 @@ services:
       - FLASK_APP=scraping-service/app.py
       - FLASK_ENV=development
       - FLASK_DEBUG=1
-    #links:
+      - DOCKER=1
     volumes:
       - "./scraping-service:/scraping-service"
       - "./data:/data"

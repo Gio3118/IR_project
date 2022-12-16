@@ -87,14 +87,14 @@ class BERTSentimentAnalyzer:
             "huggingface/pytorch-transformers",
             "tokenizer",
             "bert-base-uncased",
-            trust_repo="check",
+            trust_repo=True,
         )
         self.model = torch.hub.load(
             "huggingface/pytorch-transformers",
             "modelForSequenceClassification",
             "bert-base-uncased",
             output_attentions=True,
-            trust_repo="check",
+            trust_repo=True,
         )
 
         self.model.classifier = torch.nn.Linear(self.model.classifier.in_features, 5)
@@ -119,7 +119,9 @@ class BERTSentimentAnalyzer:
         torch.save(self.model.state_dict(), model_path)
 
     def load_model(self):
-        self.model.load_state_dict(torch.load(self.model_path))
+        self.model.load_state_dict(
+            torch.load(self.model_path, map_location=self.device)
+        )
 
     def analyze(self, text: str) -> int:
         text = clean_tweet(text)
@@ -131,8 +133,8 @@ class BERTSentimentAnalyzer:
             return_attention_mask=True,
             return_tensors="pt",
         )
-        input_ids = encoded_dict["input_ids"].cuda()
-        attention_masks = encoded_dict["attention_mask"].cuda()
+        input_ids = encoded_dict["input_ids"].to(self.device)
+        attention_masks = encoded_dict["attention_mask"].to(self.device)
         output = self.model(input_ids, attention_masks)
         return output[0].argmax().item()
 

@@ -1,8 +1,9 @@
-'''
+"""
 Indexing using PyLucene, example code
-'''
+"""
 import os
 import csv
+import pandas as pd
 from pathlib import Path
 
 import lucene
@@ -10,86 +11,82 @@ import lucene
 from java.nio.file import Paths
 from org.apache.lucene.analysis.standard import StandardAnalyzer
 from org.apache.lucene.document import Document, Field, FieldType
-from org.apache.lucene.index import (IndexOptions, IndexWriter, IndexWriterConfig)
+from org.apache.lucene.index import IndexOptions, IndexWriter, IndexWriterConfig
 from org.apache.lucene.store import MMapDirectory, NIOFSDirectory
 
 
-# fsDir = MMapDirectory(Paths.get('index'))
+data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "data"))
 
-#
-# # Define field type
-# t1 = FieldType()
-# t1.setStored(True)
-# t1.setIndexOptions(IndexOptions.DOCS)
-#
-# t2 = FieldType()
-# t2.setStored(False)
-# t2.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
-# print(f"{writer.numRamDocs()} docs found in index")
-# # Add a document
-# doc = Document()
-# doc.add(Field('id', '418129481', t1))
-#
-# writer.addDocument(doc)
-# print(f"{writer.numRamDocs()} docs found in index")
 
-dataPath = "./data"
+def initFields():
+    # field types
+    usernameField = FieldType()
+    # nameFieldType.setIndexed(False)
+    usernameField.setStored(True)
+    usernameField.setTokenized(True)
+    usernameField.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
 
-def indexData():
+    tweetField = FieldType()
+    # textFieldType.setIndexed(True)
+    tweetField.setStored(True)
+    tweetField.setTokenized(True)
+    tweetField.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
+
+    sentimentField = FieldType()
+    # textFieldType.setIndexed(True)
+    sentimentField.setStored(True)
+    sentimentField.setTokenized(True)
+    sentimentField.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
+
+    return usernameField, tweetField, sentimentField
+
+
+def indexFile(path: str):
     writerConfig = IndexWriterConfig(StandardAnalyzer())
     writerConfig.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND)
-    fsDir = MMapDirectory(Paths.get('index'))
+    fsDir = MMapDirectory(Paths.get("index"))
     writer = IndexWriter(fsDir, writerConfig)
+    if not path.endswith(".csv") and not path.endswith(".json"):
+        return
+    csv = path.endswith(".csv")
 
-    #field types
-    nameFieldType = FieldType()
-    #nameFieldType.setIndexed(False)
-    nameFieldType.setStored(True)
-    nameFieldType.setTokenized(True)
-    nameFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
+    usernameField, tweetField, sentimentField = initFields()
 
+    if csv:
+        df = pd.read_csv(path, header=0)
+        for index, row in df.iterrows():
+            doc = Document()
+            name = row["UserName"]
+            tweet = row["OriginalTweet"]
+            sentiment = row["Sentiment"]
+            doc.add(Field("username", name, usernameField))
+            doc.add(Field("tweet", tweet, tweetField))
+            doc.add(Field("sentiment", sentiment, sentimentField))
+            writer.addDocument(doc)
+    else:
+        df = pd.read_json(path)
+        print(df, flush=True)
+        for index, row in df.iterrows():
+            doc = Document()
+            name = row["user"]
+            tweet = row["tweet"]
+            sentiment = row["sentiment"]
+            doc.add(Field("username", name, usernameField))
+            doc.add(Field("tweet", tweet, tweetField))
+            doc.add(Field("sentiment", sentiment, sentimentField))
+            writer.addDocument(doc)
 
-    textFieldType = FieldType()
-    #textFieldType.setIndexed(True)
-    textFieldType.setStored(True)
-    textFieldType.setTokenized(True)
-    textFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
-
-    sentimentFieldType = FieldType()
-    #textFieldType.setIndexed(True)
-    sentimentFieldType.setStored(True)
-    sentimentFieldType.setTokenized(True)
-    sentimentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS)
-
-    for path, subDirs, filenames in os.walk(dataPath):
-        print("path:")
-        print(path)
-        print("SUBDIRS")
-
-        print(subDirs)
-        print("FILENAMES:")
-        print(filenames)
-
-        for filename in filenames:
-            fullPath = path + "/" + filename
-            with open(fullPath) as csv_file:
-                csv_reader = csv.reader(csv_file, delimiter=',')
-                firstRow = True
-                for row in csv_reader:
-                    doc = Document()
-                    if firstRow:
-                        firstRow = False
-                        continue
-                    name = row[0]
-                    text = row[4]
-                    sentiment = row[5]
-                    doc.add(Field('name', name , nameFieldType))
-                    doc.add(Field('text', text , textFieldType))
-                    doc.add(Field('sentiment', sentiment , sentimentFieldType))
-                    writer.addDocument(doc)
     writer.commit()
     writer.close()
 
-if __name__ == '__main__':
-    lucene.initVM(vmargs=['-Djava.awt.headless=true'])
+
+def indexData(dataPath=data_path):
+    for path, subDirs, filenames in os.walk(dataPath):
+        for filename in filenames:
+            fullPath = path + "/" + filename
+            indexFile(fullPath)
+
+
+if __name__ == "__main__":
+    lucene.initVM(vmargs=["-Djava.awt.headless=true"])
     indexData()
