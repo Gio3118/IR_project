@@ -5,6 +5,10 @@ import re
 import time
 import numpy as np
 from datetime import datetime as dt
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from sklearn.metrics import classification_report, confusion_matrix
 
 from torch.utils.data import (
     TensorDataset,
@@ -243,8 +247,10 @@ class BERTSentimentAnalyzer:
         preds, truths, _ = self.evaluate(test_dataloader)
         accuracy = accuracy_score(preds, truths)
         print(f"Accuracy: {accuracy:.2f}%")
+        return preds, truths
 
     def evaluate(self, eval_loader: DataLoader):
+        torch.cuda.empty_cache()
         self.model.eval()
         predictions, true_labels = [], []
         loss_function = torch.nn.CrossEntropyLoss()
@@ -268,9 +274,132 @@ class BERTSentimentAnalyzer:
         return predictions, true_labels, validation_loss
 
 
+def tweet_eval():
+    path_cur_file = os.path.dirname(__file__)
+    model_path = os.path.join(path_cur_file, "models/BertModel-acc87.pt")
+    model = BERTSentimentAnalyzer(model_path=model_path)
+
+    test_df = load_data_from_csv(
+        "src/data/tweeteval/test_text (1).csv",
+        header=0,
+        cols=["OriginalTweet", "Sentiment"],
+        drop_cols=[],
+        tweets_col="OriginalTweet",
+    )
+
+    preds, labels = model.test(test_df)
+
+    targets = [
+        "Negative",
+        "Neutral",
+        "Positive",
+    ]
+    preds = np.concatenate(preds, axis=0)
+    labels = np.concatenate(labels, axis=0)
+    preds = np.argmax(preds, axis=1).flatten()
+    labels = labels.flatten()
+    preds[preds == 1] = 0
+    preds[preds == 2] = 1
+    preds[preds == 3] = 2
+    preds[preds == 4] = 2
+    labels[labels == 1] = 0
+    labels[labels == 2] = 1
+    labels[labels == 3] = 2
+    labels[labels == 4] = 2
+    report = classification_report(labels, preds, target_names=targets)
+    cm = confusion_matrix(labels, preds, labels=[0, 1, 2])
+    print(report)
+    df = pd.DataFrame(cm, index=targets, columns=targets)
+    heatmap = sns.heatmap(df, annot=True, fmt="g")
+    heatmap.set(xlabel="Predicted", ylabel="Actual")
+    heatmap.set_title("Confusion Matrix of TweetEval Test Set")
+    plt.show()
+
+
+def get_metrics(model, dataloader, targets):
+    preds, labels, _ = model.evaluate(dataloader)
+    preds = np.concatenate(preds, axis=0)
+    labels = np.concatenate(labels, axis=0)
+    preds = np.argmax(preds, axis=1).flatten()
+    labels = labels.flatten()
+    report = classification_report(
+        labels, preds, target_names=targets, output_dict=True
+    )
+    precision = report["weighted avg"]["precision"]
+    recall = report["weighted avg"]["recall"]
+    f1 = report["weighted avg"]["f1-score"]
+    return precision, recall, f1
+
+
+def generate_graphs(cols, dropcols):
+    precision_test = []
+    recall_test = []
+    f1_test = []
+    precision_train = []
+    recall_train = []
+    f1_train = []
+    targets = [
+        "E. Negative",
+        "Negative",
+        "Neutral",
+        "Positive",
+        "E. Positive",
+    ]
+    path_cur_file = os.path.dirname(__file__)
+    model = BERTSentimentAnalyzer()
+    test_df = load_data_from_csv(
+        "src/data/coronanlp/Corona_NLP_test.csv",
+        header=0,
+        cols=cols,
+        drop_cols=dropcols,
+        tweets_col="OriginalTweet",
+    )
+
+    input_ids, attention_masks, labels = model.tokenize_data(test_df)
+    data = TensorDataset(input_ids, attention_masks, labels)
+    test_dataloader = DataLoader(data, sampler=SequentialSampler(data), batch_size=256)
+
+    train_df = load_data_from_csv(
+        "src/data/coronanlp/Corona_NLP_train.csv",
+        header=0,
+        cols=cols,
+        drop_cols=dropcols,
+        tweets_col="OriginalTweet",
+    )
+
+    input_ids, attention_masks, labels = model.tokenize_data(train_df)
+    data = TensorDataset(input_ids, attention_masks, labels)
+    train_dataloader = DataLoader(data, sampler=SequentialSampler(data), batch_size=256)
+    for i in range(1, 57):
+        print("Epoch", i)
+        t0 = time.perf_counter()
+        model_path = os.path.join(path_cur_file, f"models/old/BertModel-Epoch-{i}.pt")
+        model.model_path = model_path
+        model.load_model()
+
+        p, r, f = get_metrics(model, test_dataloader, targets)
+        precision_test.append(p)
+        recall_test.append(r)
+        f1_test.append(f)
+
+        p, r, f = get_metrics(model, train_dataloader, targets)
+        precision_train.append(p)
+        recall_train.append(r)
+        f1_train.append(f)
+        print("Epoch: ", i, "time: {:.2f}".format(time.perf_counter() - t0))
+
+    print("Precision Test:", precision_test)
+    print("Recall Test:", recall_test)
+    print("F1 Test:", f1_test)
+    print("Precision Train:", precision_train)
+    print("Recall Train:", recall_train)
+    print("F1 Train:", f1_train)
+
+
 if __name__ == "__main__":
     TRAIN = False
-    TEST = True
+    TEST = False
+    GENERATE_GRAPHS = True
 
     columns = [
         "UserName",
@@ -287,14 +416,13 @@ if __name__ == "__main__":
         "TweetAt",
     ]
 
+    if GENERATE_GRAPHS:
+        generate_graphs(columns, drop_columns)
+
     if TEST:
         path_cur_file = os.path.dirname(__file__)
         model_path = os.path.join(path_cur_file, "models/BertModel-acc87.pt")
         model = BERTSentimentAnalyzer(model_path=model_path)
-        res = model.analyze("Omg I love this movie so much!")
-        print(res)
-        res = model.analyze("That ref was really biased")
-        print(res)
         test_df = load_data_from_csv(
             "src/data/coronanlp/Corona_NLP_test.csv",
             header=0,
@@ -303,7 +431,27 @@ if __name__ == "__main__":
             tweets_col="OriginalTweet",
         )
 
-        model.test(test_df)
+        preds, labels = model.test(test_df)
+
+        targets = [
+            "E. Negative",
+            "Negative",
+            "Neutral",
+            "Positive",
+            "E. Positive",
+        ]
+        preds = np.concatenate(preds, axis=0)
+        labels = np.concatenate(labels, axis=0)
+        preds = np.argmax(preds, axis=1).flatten()
+        labels = labels.flatten()
+        report = classification_report(labels, preds, target_names=targets)
+        cm = confusion_matrix(labels, preds, labels=[0, 1, 2, 3, 4])
+        print(report)
+        df = pd.DataFrame(cm, index=targets, columns=targets)
+        heatmap = sns.heatmap(df, annot=True, fmt="g")
+        heatmap.set(xlabel="Predicted", ylabel="Actual")
+        heatmap.set_title("Confusion Matrix of CoronaNLP Test Set")
+        plt.show()
 
     if TRAIN:
         path_cur_file = os.path.dirname(__file__)

@@ -71,8 +71,15 @@ def lookup():
     if searcher is None or analyzer is None:
         return make_response("Search service not available.", 503)
 
-    df, leng = run(searcher, analyzer, query, page=page)
-    print(df)
+    df, hits, sentiments = run(
+        searcher, analyzer, query, page=page, calculate_sentiment=True
+    )
     del searcher
     del analyzer
-    return {"message": "Ok!", "data": df.to_dict(orient="records"), "leng": leng}, 200
+    print(sentiments, flush=True)
+    return {
+        "message": "Ok!",
+        "data": df.to_dict(orient="records"),
+        "hits": hits,
+        "sentiments": sentiments,
+    }, 200

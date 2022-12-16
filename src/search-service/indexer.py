@@ -15,11 +15,6 @@ from org.apache.lucene.index import IndexOptions, IndexWriter, IndexWriterConfig
 from org.apache.lucene.store import MMapDirectory, NIOFSDirectory
 
 
-data_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), os.pardir, "data", "coronanlp")
-)
-
-
 def initFields():
     # field types
     usernameField = FieldType()
@@ -82,7 +77,7 @@ def indexFile(path: str):
     writer.close()
 
 
-def indexData(dataPath=data_path):
+def indexData(dataPath: str):
     for path, subDirs, filenames in os.walk(dataPath):
         for filename in filenames:
             fullPath = path + "/" + filename
@@ -91,4 +86,7 @@ def indexData(dataPath=data_path):
 
 if __name__ == "__main__":
     lucene.initVM(vmargs=["-Djava.awt.headless=true"])
-    indexData()
+    data_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), os.pardir, "data", "coronanlp")
+    )
+    indexData(data_path)
