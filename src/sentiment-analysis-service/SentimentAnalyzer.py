@@ -193,12 +193,12 @@ class BERTSentimentAnalyzer:
         )
 
         # Setting up the optimizer and the learning rate scheduler
-        optimizer = SGD(self.model.parameters(), lr=0.01, momentum=0.9)
-        # optimizer = AdamW(self.model.parameters(), lr=2e-5, eps=1e-8)
+        # optimizer = SGD(self.model.parameters(), lr=0.01, momentum=0.9)
+        optimizer = AdamW(self.model.parameters(), lr=2e-5, eps=1e-8)
         total_steps = len(training_dataloader) * epochs
-        scheduler = lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.1, patience=5
-        )
+        # scheduler = lr_scheduler.ReduceLROnPlateau(
+        #     optimizer, mode="min", factor=0.1, patience=5
+        # )
         torch.cuda.empty_cache()
 
         # Loss function
@@ -228,7 +228,7 @@ class BERTSentimentAnalyzer:
             avg_train_loss = total_loss / len(training_dataloader)
             preds, truths, validation_loss = self.evaluate(validation_dataloader)
             accuracy = accuracy_score(preds, truths)
-            scheduler.step(validation_loss)
+            # scheduler.step(validation_loss)
             training_time_epoch = time.time() - t_start_epoch
             print(
                 f"Epoch: {epoch + 1},",
@@ -328,16 +328,19 @@ def get_metrics(model, dataloader, targets):
     precision = report["weighted avg"]["precision"]
     recall = report["weighted avg"]["recall"]
     f1 = report["weighted avg"]["f1-score"]
-    return precision, recall, f1
+    print(report)
+    return precision, recall, f1, _
 
 
 def generate_graphs(cols, dropcols):
     precision_test = []
     recall_test = []
     f1_test = []
+    loss_test = []
     precision_train = []
     recall_train = []
     f1_train = []
+    loss_train = []
     targets = [
         "E. Negative",
         "Negative",
@@ -345,61 +348,72 @@ def generate_graphs(cols, dropcols):
         "Positive",
         "E. Positive",
     ]
-    path_cur_file = os.path.dirname(__file__)
-    model = BERTSentimentAnalyzer()
-    test_df = load_data_from_csv(
-        "src/data/coronanlp/Corona_NLP_test.csv",
-        header=0,
-        cols=cols,
-        drop_cols=dropcols,
-        tweets_col="OriginalTweet",
-    )
+    for i in range(1, 13):
 
-    input_ids, attention_masks, labels = model.tokenize_data(test_df)
-    data = TensorDataset(input_ids, attention_masks, labels)
-    test_dataloader = DataLoader(data, sampler=SequentialSampler(data), batch_size=256)
+        path_cur_file = os.path.dirname(__file__)
+        model_path = os.path.join(path_cur_file, f"models/old/model_{i}.pt")
+        model = BERTSentimentAnalyzer(model_path=model_path)
+        test_df = load_data_from_csv(
+            "src/data/coronanlp/Corona_NLP_test.csv",
+            header=0,
+            cols=cols,
+            drop_cols=dropcols,
+            tweets_col="OriginalTweet",
+        )
 
-    train_df = load_data_from_csv(
-        "src/data/coronanlp/Corona_NLP_train.csv",
-        header=0,
-        cols=cols,
-        drop_cols=dropcols,
-        tweets_col="OriginalTweet",
-    )
+        input_ids, attention_masks, labels = model.tokenize_data(test_df)
+        data = TensorDataset(input_ids, attention_masks, labels)
+        test_dataloader = DataLoader(
+            data, sampler=SequentialSampler(data), batch_size=16
+        )
 
-    input_ids, attention_masks, labels = model.tokenize_data(train_df)
-    data = TensorDataset(input_ids, attention_masks, labels)
-    train_dataloader = DataLoader(data, sampler=SequentialSampler(data), batch_size=256)
-    for i in range(1, 57):
+        train_df = load_data_from_csv(
+            "src/data/coronanlp/Corona_NLP_train.csv",
+            header=0,
+            cols=cols,
+            drop_cols=dropcols,
+            tweets_col="OriginalTweet",
+        )
+
+        input_ids, attention_masks, labels = model.tokenize_data(train_df)
+        data = TensorDataset(input_ids, attention_masks, labels)
+        train_dataloader = DataLoader(
+            data, sampler=SequentialSampler(data), batch_size=16
+        )
+
         print("Epoch", i)
         t0 = time.perf_counter()
-        model_path = os.path.join(path_cur_file, f"models/old/BertModel-Epoch-{i}.pt")
-        model.model_path = model_path
-        model.load_model()
+        # model_path = os.path.join(path_cur_file, f"models/old/model_{i}.pt")
+        # model.model_path = model_path
+        # model.load_model()
 
-        p, r, f = get_metrics(model, test_dataloader, targets)
+        p, r, f, loss = get_metrics(model, test_dataloader, targets)
         precision_test.append(p)
         recall_test.append(r)
         f1_test.append(f)
+        loss_test.append(loss)
 
-        p, r, f = get_metrics(model, train_dataloader, targets)
+        p, r, f, loss = get_metrics(model, train_dataloader, targets)
         precision_train.append(p)
         recall_train.append(r)
         f1_train.append(f)
+        loss_train.append(loss)
         print("Epoch: ", i, "time: {:.2f}".format(time.perf_counter() - t0))
 
     print("Precision Test:", precision_test)
     print("Recall Test:", recall_test)
     print("F1 Test:", f1_test)
+    print("Loss Test:", loss_test)
     print("Precision Train:", precision_train)
     print("Recall Train:", recall_train)
     print("F1 Train:", f1_train)
+    print("Loss Train:", loss_train)
 
 
 if __name__ == "__main__":
     TRAIN = False
-    TEST = False
-    GENERATE_GRAPHS = True
+    TEST = True
+    GENERATE_GRAPHS = False
 
     columns = [
         "UserName",
@@ -417,11 +431,13 @@ if __name__ == "__main__":
     ]
 
     if GENERATE_GRAPHS:
-        generate_graphs(columns, drop_columns)
+        # generate_graphs(columns, drop_columns)
+        # output_graphs()
+        pass
 
     if TEST:
         path_cur_file = os.path.dirname(__file__)
-        model_path = os.path.join(path_cur_file, "models/BertModel-acc87.pt")
+        model_path = os.path.join(path_cur_file, "models/old/BertModel-Epoch-5.pt")
         model = BERTSentimentAnalyzer(model_path=model_path)
         test_df = load_data_from_csv(
             "src/data/coronanlp/Corona_NLP_test.csv",
@@ -446,7 +462,6 @@ if __name__ == "__main__":
         labels = labels.flatten()
         report = classification_report(labels, preds, target_names=targets)
         cm = confusion_matrix(labels, preds, labels=[0, 1, 2, 3, 4])
-        print(report)
         df = pd.DataFrame(cm, index=targets, columns=targets)
         heatmap = sns.heatmap(df, annot=True, fmt="g")
         heatmap.set(xlabel="Predicted", ylabel="Actual")

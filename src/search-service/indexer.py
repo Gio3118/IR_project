@@ -38,12 +38,12 @@ def initFields():
     return usernameField, tweetField, sentimentField
 
 
-def indexFile(path: str):
+def indexFile(path: str, index_path: str = "index"):
     if not path.endswith(".csv") and not path.endswith(".json"):
         return
     writerConfig = IndexWriterConfig(StandardAnalyzer())
     writerConfig.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND)
-    fsDir = MMapDirectory(Paths.get("index"))
+    fsDir = MMapDirectory(Paths.get(index_path))
     writer = IndexWriter(fsDir, writerConfig)
     csv = path.endswith(".csv")
 
